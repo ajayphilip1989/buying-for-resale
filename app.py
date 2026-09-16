@@ -215,17 +215,20 @@ def student_view():
     answer_panel()
 
 
-@st.fragment(run_every="3s")
 def answer_panel():
     s = state()
     qid = s["open"]
     nick = st.session_state["nickname"]
 
     if qid is None:
-        st.info("Waiting for the next question.")
+        st.info("No question is open at the moment.")
+        st.button("Check for a question", type="primary", key="chk_idle")
+        st.caption("Tap this when you are told a question is open. "
+                   "The page does not update on its own.")
         return
     if (nick.strip().lower(), qid) in s["answered"]:
-        st.success("Your answer has been recorded. Waiting for the next question.")
+        st.success("Your answer has been recorded.")
+        st.button("Check for the next question", type="primary", key="chk_done")
         return
 
     q = QUESTIONS[qid]
@@ -238,7 +241,7 @@ def answer_panel():
             words = [w for w in words if w][:3]
             if words:
                 record(qid, nick, ", ".join(words))
-                st.rerun(scope="fragment")
+                st.rerun()
             else:
                 st.warning("Type at least one word.")
 
@@ -247,7 +250,7 @@ def answer_panel():
         if st.button("Send", type="primary", key=f"b_{qid}"):
             if choice:
                 record(qid, nick, choice)
-                st.rerun(scope="fragment")
+                st.rerun()
             else:
                 st.warning("Pick one option.")
 
@@ -256,7 +259,7 @@ def answer_panel():
         if st.button("Send", type="primary", key=f"b_{qid}"):
             if picked:
                 record(qid, nick, "; ".join(picked))
-                st.rerun(scope="fragment")
+                st.rerun()
             else:
                 st.warning("Tick at least one.")
 
@@ -281,6 +284,8 @@ PROJECTOR_CSS = """
 """
 
 
+# The projector is ONE browser, so polling here costs almost nothing.
+# Students and the instructor panel do not poll at all.
 @st.fragment(run_every="2s")
 def projector_view():
     s = state()
@@ -402,8 +407,9 @@ def instructor_view():
             st.rerun()
 
 
-@st.fragment(run_every="3s")
 def monitor():
+    if st.button("Refresh counts"):
+        st.rerun()
     tabs = st.tabs([q["label"] for q in QUESTIONS.values()])
     for tab, (qid, q) in zip(tabs, QUESTIONS.items()):
         with tab:
