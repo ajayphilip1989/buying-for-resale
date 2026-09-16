@@ -2,13 +2,14 @@
 Basics of Purchasing — in-class response app
 Lecture 16.
 
-No external accounts needed. Responses are held in memory, mirrored to
-responses.json on the container after every submission, and downloadable
-as CSV at any time.
+Three roles, chosen in the sidebar:
+  Student    — no password. Nickname once, then answer what is open.
+  Projector  — password. Big screen at the front. No controls.
+  Instructor — password. Opens and closes questions, reveals results, CSV.
 
-Optional: if FORM_POST_URL and FIELD_IDS are filled in below, every response
-is also posted to a Google Form, which writes it to that Form's linked Sheet.
-Leave them blank and the app works exactly the same without it.
+Responses live in server memory and are mirrored to responses.json, so
+refreshes, logouts and reconnects cost nothing. A container restart is
+the only exposure — download the CSV after each question.
 """
 
 import csv
@@ -16,8 +17,6 @@ import io
 import json
 import os
 import threading
-import urllib.parse
-import urllib.request
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 
@@ -26,16 +25,8 @@ import streamlit as st
 IST = timezone(timedelta(hours=5, minutes=30))
 STORE = "responses.json"
 
-# --- optional Google Form mirror (leave blank to skip) ---------------------
-FORM_POST_URL = ""       # .../formResponse
-FIELD_IDS = {            # entry.XXXXXXX ids from the form
-    "timestamp": "",
-    "question": "",
-    "nickname": "",
-    "answer": "",
-}
-
-# --------------------------------------------------------------------------
+PROJECTOR_PW = "screen16"      # change before class
+INSTRUCTOR_PW = "shelf2026"    # change before class
 
 QUESTIONS = {
     "q1": {
@@ -43,7 +34,7 @@ QUESTIONS = {
         "prompt": "In one or two words: what would you look at to decide "
                   "which brands to keep, and how much of each?",
         "type": "words",
-        "help": "Up to three words. Separate them with spaces or commas.",
+        "help": "Up to three entries, separated by commas. An entry can be two words, e.g. shelf space",
     },
     "q2": {
         "label": "Q2 — best use of space",
@@ -60,18 +51,24 @@ QUESTIONS = {
 }
 
 HEADER = ["timestamp_ist", "question", "nickname", "answer"]
-ADMIN_CODE = "shelf2026"          # change this before class
+INK, BLUE, GREEN, AMBER, SLATE = "#16303F", "#2E7CA8", "#00875A", "#BE7B12", "#5C7288"
 
+
+# --------------------------------------------------------------------------
+# shared state
+# --------------------------------------------------------------------------
 
 @st.cache_resource
 def state():
     s = {
-        "open": None,
+        "open": None,        # question accepting answers
+        "project": None,     # question shown on the projector
+        "reveal": False,     # show the distribution, or just a count
         "rows": [],
         "answered": set(),
         "lock": threading.Lock(),
     }
-    if os.path.exists(STORE):                       # survive a restart
+    if os.path.exists(STORE):
         try:
             with open(STORE) as fh:
                 s["rows"] = json.load(fh)
@@ -82,25 +79,9 @@ def state():
 
 
 def persist():
-    s = state()
     try:
         with open(STORE, "w") as fh:
-            json.dump(s["rows"], fh)
-    except Exception:
-        pass
-
-
-def mirror_to_form(row):
-    if not FORM_POST_URL or not FIELD_IDS.get("answer"):
-        return
-    try:
-        data = urllib.parse.urlencode({
-            FIELD_IDS["timestamp"]: row[0],
-            FIELD_IDS["question"]: row[1],
-            FIELD_IDS["nickname"]: row[2],
-            FIELD_IDS["answer"]: row[3],
-        }).encode()
-        urllib.request.urlopen(FORM_POST_URL, data=data, timeout=4)
+            json.dump(state()["rows"], fh)
     except Exception:
         pass
 
@@ -112,13 +93,14 @@ def record(qid, nickname, answer):
         s["rows"].append(row)
         s["answered"].add((nickname.strip().lower(), qid))
     persist()
-    mirror_to_form(row)
 
 
 def answers_for(qid):
     return [r[3] for r in state()["rows"] if r[1] == qid]
 
 
+# --------------------------------------------------------------------------
+# word handling
 # --------------------------------------------------------------------------
 
 STOP = {"the", "a", "an", "of", "and", "or", "to", "in", "is", "it", "for",
@@ -136,38 +118,89 @@ def normalise(word):
     return FOLD.get(w, w)
 
 
-def cloud_html(words):
-    counts = Counter(w for w in words if w and w not in STOP)
+def word_counts(qid):
+    words = []
+    for a in answers_for(qid):
+        words += [x.strip() for x in a.split(",")]
+    return Counter(w for w in words if w and w not in STOP)
+
+
+def cloud_html(counts, scale=1.0):
     if not counts:
-        return "<p style='color:#6B8194'>No responses yet.</p>"
+        return f"<p style='color:{SLATE};text-align:center'>No responses yet.</p>"
     top = counts.most_common(40)
     hi = top[0][1]
-    palette = ["#16303F", "#2E7CA8", "#00875A", "#BE7B12", "#5C7288"]
+    palette = [INK, BLUE, GREEN, AMBER, SLATE]
     spans = []
     for i, (w, n) in enumerate(top):
-        size = 16 + int(46 * (n / hi) ** 0.7)
+        size = int((16 + 46 * (n / hi) ** 0.7) * scale)
         spans.append(f"<span style='font-size:{size}px;color:{palette[i % 5]};"
-                     f"margin:6px 14px;display:inline-block;font-weight:600;"
-                     f"font-family:Calibri,sans-serif' title='{n}'>{w}</span>")
-    return ("<div style='text-align:center;line-height:1.5;padding:18px'>"
+                     f"margin:{int(8*scale)}px {int(16*scale)}px;display:inline-block;"
+                     f"font-weight:600;font-family:Calibri,sans-serif'>{w}</span>")
+    return ("<div style='text-align:center;line-height:1.4;padding:20px'>"
             + "".join(spans) + "</div>")
 
 
+def option_counts(qid):
+    counts = Counter()
+    for a in answers_for(qid):
+        for part in a.split(";"):
+            counts[part.strip()] += 1
+    return counts
+
+
+def bars_html(qid, big=False):
+    q = QUESTIONS[qid]
+    counts = option_counts(qid)
+    total = len(answers_for(qid)) or 1
+    fs = 34 if big else 18
+    h = 34 if big else 20
+    out = []
+    for i, opt in enumerate(q["options"]):
+        n = counts.get(opt, 0)
+        pct = 100 * n / total
+        colour = [BLUE, GREEN, AMBER, SLATE][i % 4]
+        out.append(
+            f"<div style='margin:{h//2}px 0;font-family:Calibri,sans-serif'>"
+            f"<div style='font-size:{fs}px;color:{INK};font-weight:600'>{opt} "
+            f"<span style='color:{SLATE};font-weight:400'>&nbsp;{n}</span></div>"
+            f"<div style='background:#EEF3F7;border-radius:6px;height:{h}px;width:100%'>"
+            f"<div style='background:{colour};height:{h}px;width:{pct:.1f}%;"
+            f"border-radius:6px'></div></div></div>")
+    return "<div style='padding:10px 40px'>" + "".join(out) + "</div>"
+
+
+# --------------------------------------------------------------------------
+# student
 # --------------------------------------------------------------------------
 
 def student_view():
     st.title("Basics of Purchasing")
+
+    # the nickname lives in the URL, so a refresh or a reconnect keeps it
+    if "nickname" not in st.session_state:
+        from_url = st.query_params.get("me", "").strip()
+        if from_url:
+            st.session_state["nickname"] = from_url
+
     if "nickname" not in st.session_state:
         st.write("Enter your nickname in the usual format to begin.")
         name = st.text_input("Nickname", max_chars=40)
         if st.button("Start", type="primary"):
             if name.strip():
                 st.session_state["nickname"] = name.strip()
+                st.query_params["me"] = name.strip()
                 st.rerun()
             else:
                 st.warning("Please enter a nickname.")
         return
-    st.caption(f"Signed in as {st.session_state['nickname']}")
+
+    left, right = st.columns([5, 1])
+    left.caption(f"Signed in as {st.session_state['nickname']}")
+    if right.button("Not you?"):
+        st.session_state.pop("nickname", None)
+        st.query_params.clear()
+        st.rerun()
     answer_panel()
 
 
@@ -188,9 +221,9 @@ def answer_panel():
     st.subheader(q["prompt"])
 
     if q["type"] == "words":
-        text = st.text_input(q.get("help", ""), max_chars=60, key=f"in_{qid}")
+        text = st.text_input(q.get("help", ""), max_chars=70, key=f"in_{qid}")
         if st.button("Send", type="primary", key=f"b_{qid}"):
-            words = [normalise(w) for w in text.replace(",", " ").split()]
+            words = [normalise(w) for w in text.split(",")]
             words = [w for w in words if w][:3]
             if words:
                 record(qid, nick, ", ".join(words))
@@ -218,11 +251,57 @@ def answer_panel():
 
 
 # --------------------------------------------------------------------------
+# projector
+# --------------------------------------------------------------------------
 
-def admin_view():
+@st.fragment(run_every="2s")
+def projector_view():
+    s = state()
+    qid = s["project"] or s["open"]
+
+    if qid is None:
+        st.markdown(
+            f"<div style='text-align:center;padding-top:120px;font-family:Calibri,sans-serif'>"
+            f"<div style='font-size:46px;color:{INK};font-weight:700'>Basics of Purchasing</div>"
+            f"<div style='font-size:24px;color:{SLATE};margin-top:14px'>Buying for resale</div>"
+            "</div>", unsafe_allow_html=True)
+        return
+
+    q = QUESTIONS[qid]
+    n = len(answers_for(qid))
+
+    st.markdown(
+        f"<div style='font-size:30px;color:{INK};font-weight:700;"
+        f"font-family:Calibri,sans-serif;padding:6px 30px 0'>{q['prompt']}</div>",
+        unsafe_allow_html=True)
+
+    if not s["reveal"]:
+        st.markdown(
+            f"<div style='text-align:center;padding-top:90px;font-family:Calibri,sans-serif'>"
+            f"<div style='font-size:96px;color:{BLUE};font-weight:700'>{n}</div>"
+            f"<div style='font-size:26px;color:{SLATE}'>responses received</div>"
+            "</div>", unsafe_allow_html=True)
+        return
+
+    if q["type"] == "words":
+        st.markdown(cloud_html(word_counts(qid), scale=1.5), unsafe_allow_html=True)
+    else:
+        st.markdown(bars_html(qid, big=True), unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='text-align:center;color:{SLATE};font-size:20px;"
+        f"font-family:Calibri,sans-serif'>{n} responses</div>",
+        unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------
+# instructor
+# --------------------------------------------------------------------------
+
+def instructor_view():
     st.title("Instructor panel")
     s = state()
 
+    st.write("**Accepting answers**")
     cols = st.columns(len(QUESTIONS) + 1)
     for i, (qid, q) in enumerate(QUESTIONS.items()):
         live = s["open"] == qid
@@ -230,13 +309,38 @@ def admin_view():
                           type="primary" if live else "secondary",
                           use_container_width=True):
             s["open"] = None if live else qid
+            if not live:
+                s["project"], s["reveal"] = qid, False
             st.rerun()
     if cols[-1].button("Close all", use_container_width=True):
         s["open"] = None
         st.rerun()
 
+    st.write("**On the projector**")
+    pcols = st.columns(len(QUESTIONS) + 2)
+    for i, (qid, q) in enumerate(QUESTIONS.items()):
+        shown = s["project"] == qid
+        if pcols[i].button(("Showing " if shown else "Show ") + q["label"],
+                           type="primary" if shown else "secondary",
+                           use_container_width=True):
+            s["project"] = qid
+            st.rerun()
+    if pcols[-2].button("Blank screen", use_container_width=True):
+        s["project"], s["reveal"] = None, False
+        st.rerun()
+    if pcols[-1].button("Hide results" if s["reveal"] else "REVEAL results",
+                        type="secondary" if s["reveal"] else "primary",
+                        use_container_width=True):
+        s["reveal"] = not s["reveal"]
+        st.rerun()
+
+    st.caption(
+        f"Open: {QUESTIONS[s['open']]['label'] if s['open'] else 'none'}  |  "
+        f"Projector: {QUESTIONS[s['project']]['label'] if s['project'] else 'blank'}  |  "
+        f"Results: {'revealed' if s['reveal'] else 'hidden'}")
+
     st.divider()
-    live_panel()
+    monitor()
     st.divider()
 
     buf = io.StringIO()
@@ -246,41 +350,47 @@ def admin_view():
     st.download_button("Download responses (CSV)", buf.getvalue(),
                        file_name="lecture16_responses.csv", mime="text/csv",
                        type="primary", use_container_width=True)
-    st.caption(f"{len(s['rows'])} response(s) held. Saved to disk after every submission.")
+    st.caption(f"{len(s['rows'])} response(s) held.")
 
 
 @st.fragment(run_every="3s")
-def live_panel():
-    s = state()
-    st.caption("Open question: " +
-               (QUESTIONS[s["open"]]["label"] if s["open"] else "none"))
+def monitor():
     tabs = st.tabs([q["label"] for q in QUESTIONS.values()])
-    for tab, (tid, q) in zip(tabs, QUESTIONS.items()):
+    for tab, (qid, q) in zip(tabs, QUESTIONS.items()):
         with tab:
-            data = answers_for(tid)
+            data = answers_for(qid)
             st.caption(f"{len(data)} response(s)")
             if q["type"] == "words":
-                words = []
-                for a in data:
-                    words += [x.strip() for x in a.split(",")]
-                st.markdown(cloud_html(words), unsafe_allow_html=True)
+                st.markdown(cloud_html(word_counts(qid)), unsafe_allow_html=True)
             else:
-                counts = Counter()
-                for a in data:
-                    for part in a.split(";"):
-                        counts[part.strip()] += 1
-                for opt in q["options"]:
-                    n = counts.get(opt, 0)
-                    st.write(f"**{opt}** — {n}")
-                    st.progress(min(n / len(data), 1.0) if data else 0.0)
+                st.markdown(bars_html(qid), unsafe_allow_html=True)
 
+
+# --------------------------------------------------------------------------
 
 def main():
-    st.set_page_config(page_title="Basics of Purchasing", page_icon="🛒")
-    if st.query_params.get("admin") == ADMIN_CODE:
-        admin_view()
-    else:
+    st.set_page_config(page_title="Basics of Purchasing", page_icon="🛒",
+                       layout="wide")
+    role = st.sidebar.radio("Role", ["Student", "Projector", "Instructor"])
+
+    if role == "Student":
+        st.sidebar.caption("No password needed.")
         student_view()
+        return
+
+    pw = st.sidebar.text_input("Password", type="password")
+    if role == "Projector":
+        if pw == PROJECTOR_PW:
+            st.sidebar.success("Projector mode")
+            projector_view()
+        else:
+            st.info("Enter the projector password in the sidebar.")
+    else:
+        if pw == INSTRUCTOR_PW:
+            st.sidebar.success("Instructor mode")
+            instructor_view()
+        else:
+            st.info("Enter the instructor password in the sidebar.")
 
 
 main()
