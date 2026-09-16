@@ -31,10 +31,10 @@ INSTRUCTOR_PW = "shelf2026"    # change before class
 QUESTIONS = {
     "q1": {
         "label": "Q1 — word cloud",
-        "prompt": "In one or two words: what would you look at to decide "
+        "prompt": "what would you look at to decide "
                   "which brands to keep, and how much of each?",
         "type": "words",
-        "help": "Up to three entries, separated by commas. An entry can be two words, e.g. shelf space",
+        "help": "Up to three entries, separated by commas. An entry can be two words, e.g. cricket bat",
     },
     "q2": {
         "label": "Q2 — best use of space",
