@@ -25,8 +25,8 @@ import streamlit as st
 IST = timezone(timedelta(hours=5, minutes=30))
 STORE = "responses.json"
 
-PROJECTOR_PW = "sanjana26"      # change before class
-INSTRUCTOR_PW = "prateeka26"    # change before class
+PROJECTOR_PW = "screen16"      # change before class
+INSTRUCTOR_PW = "shelf2026"    # change before class
 
 QUESTIONS = {
     "q1": {
