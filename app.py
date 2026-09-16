@@ -179,7 +179,10 @@ def student_view():
 
     # the nickname lives in the URL, so a refresh or a reconnect keeps it
     if "nickname" not in st.session_state:
-        from_url = st.query_params.get("me", "").strip()
+        try:
+            from_url = (st.query_params.get("me") or "").strip()
+        except Exception:
+            from_url = ""
         if from_url:
             st.session_state["nickname"] = from_url
 
@@ -189,11 +192,19 @@ def student_view():
         if st.button("Start", type="primary"):
             if name.strip():
                 st.session_state["nickname"] = name.strip()
+                # writing a query param triggers its own rerun; calling
+                # st.rerun() here can discard the URL update
                 st.query_params["me"] = name.strip()
-                st.rerun()
             else:
                 st.warning("Please enter a nickname.")
         return
+
+    # keep the URL in step on every run, so the param cannot go missing
+    try:
+        if st.query_params.get("me") != st.session_state["nickname"]:
+            st.query_params["me"] = st.session_state["nickname"]
+    except Exception:
+        pass
 
     left, right = st.columns([5, 1])
     left.caption(f"Signed in as {st.session_state['nickname']}")
@@ -253,6 +264,22 @@ def answer_panel():
 # --------------------------------------------------------------------------
 # projector
 # --------------------------------------------------------------------------
+
+PROJECTOR_CSS = """
+<style>
+  header[data-testid="stHeader"] {display: none !important;}
+  section[data-testid="stSidebar"] {display: none !important;}
+  div[data-testid="stToolbar"] {display: none !important;}
+  div[data-testid="stDecoration"] {display: none !important;}
+  footer {display: none !important;}
+  div[data-testid="stAppViewContainer"] > .main .block-container {
+      padding-top: 1.2rem; padding-bottom: 0.5rem;
+      max-width: 100%;
+  }
+  body {overflow: hidden;}
+</style>
+"""
+
 
 @st.fragment(run_every="2s")
 def projector_view():
@@ -387,26 +414,68 @@ def monitor():
 
 # --------------------------------------------------------------------------
 
+ROLES = ["Student", "Projector", "Instructor"]
+
+
+def qp_get(key, default=""):
+    try:
+        return (st.query_params.get(key) or default)
+    except Exception:
+        return default
+
+
+def qp_set(key, value):
+    try:
+        if st.query_params.get(key) != value:
+            st.query_params[key] = value
+    except Exception:
+        pass
+
+
 def main():
+    # set_page_config MUST be the first Streamlit call in the script.
+    # Reading query params before it raises, so it goes first.
     st.set_page_config(page_title="Basics of Purchasing", page_icon="🛒",
                        layout="wide")
-    role = st.sidebar.radio("Role", ["Student", "Projector", "Instructor"])
+
+    url_role = qp_get("role", "student").lower()
+    url_pw = qp_get("pw", "").strip()
+
+    # fast path: the URL alone is enough to get back in after a refresh,
+    # with no sidebar and no widget prefill involved
+    if url_role == "projector" and url_pw == PROJECTOR_PW:
+        st.markdown(PROJECTOR_CSS, unsafe_allow_html=True)
+        projector_view()
+        return
+    if url_role == "instructor" and url_pw == INSTRUCTOR_PW:
+        st.sidebar.success("Instructor mode")
+        instructor_view()
+        return
+    idx = {"student": 0, "projector": 1, "instructor": 2}.get(url_role, 0)
+    role = st.sidebar.radio("Role", ROLES, index=idx)
 
     if role == "Student":
         st.sidebar.caption("No password needed.")
+        qp_set("role", "student")
         student_view()
         return
 
-    pw = st.sidebar.text_input("Password", type="password")
+    typed = st.sidebar.text_input("Password", type="password")
+    pw = typed.strip() or url_pw
+
     if role == "Projector":
         if pw == PROJECTOR_PW:
-            st.sidebar.success("Projector mode")
+            qp_set("role", "projector")
+            qp_set("pw", pw)
+            st.markdown(PROJECTOR_CSS, unsafe_allow_html=True)
             projector_view()
         else:
             st.info("Enter the projector password in the sidebar.")
     else:
         if pw == INSTRUCTOR_PW:
             st.sidebar.success("Instructor mode")
+            qp_set("role", "instructor")
+            qp_set("pw", pw)
             instructor_view()
         else:
             st.info("Enter the instructor password in the sidebar.")
