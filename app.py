@@ -31,10 +31,10 @@ INSTRUCTOR_PW = "shelf2026"    # change before class
 QUESTIONS = {
     "q1": {
         "label": "Q1 — word cloud",
-        "prompt": "In one or two words: what would you look at to decide "
-                  "which brands to keep, and how much of each?",
+        "prompt": "What would you look at to decide which brands to keep, "
+                  "and how much of each?",
         "type": "words",
-        "help": "Up to three entries, separated by commas. An entry can be two words, e.g. shelf space",
+        "help": "Up to three entries, separated by commas. An entry can be up to two words, e.g. cricket bat",
     },
     "q2": {
         "label": "Q2 — best use of space",
@@ -335,8 +335,11 @@ def instructor_view():
         if cols[i].button(("Close " if live else "Open ") + q["label"],
                           type="primary" if live else "secondary",
                           use_container_width=True):
-            s["open"] = None if live else qid
-            if not live:
+            if live:                       # closing: show what came in
+                s["open"] = None
+                s["project"], s["reveal"] = qid, True
+            else:                          # opening: count only, no anchoring
+                s["open"] = qid
                 s["project"], s["reveal"] = qid, False
             st.rerun()
     if cols[-1].button("Close all", use_container_width=True):
