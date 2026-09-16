@@ -25,8 +25,8 @@ import streamlit as st
 IST = timezone(timedelta(hours=5, minutes=30))
 STORE = "responses.json"
 
-PROJECTOR_PW = "sanjana2026"      # change before class
-INSTRUCTOR_PW = "prateeka2026"    # change before class
+PROJECTOR_PW = "screen16"      # change before class
+INSTRUCTOR_PW = "shelf2026"    # change before class
 
 QUESTIONS = {
     "q1": {
@@ -351,6 +351,25 @@ def instructor_view():
                        file_name="lecture16_responses.csv", mime="text/csv",
                        type="primary", use_container_width=True)
     st.caption(f"{len(s['rows'])} response(s) held.")
+
+    with st.expander("Clear all responses"):
+        st.write("This deletes every response held by the app. "
+                 "Download the CSV first if you want a copy.")
+        typed = st.text_input("Type CLEAR to confirm", key="clear_confirm")
+        if st.button("Clear everything now", disabled=(typed.strip().upper() != "CLEAR")):
+            with s["lock"]:
+                s["rows"].clear()
+                s["answered"].clear()
+                s["open"] = None
+                s["project"] = None
+                s["reveal"] = False
+            try:
+                if os.path.exists(STORE):
+                    os.remove(STORE)
+            except Exception:
+                pass
+            st.success("Cleared.")
+            st.rerun()
 
 
 @st.fragment(run_every="3s")
